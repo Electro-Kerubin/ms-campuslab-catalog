@@ -2,7 +2,6 @@ package org.campuslab.catalog;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.context.annotation.ComponentScan;
 
 /**
  * Catalog Service Application
@@ -17,7 +16,6 @@ import org.springframework.context.annotation.ComponentScan;
  * - Consultas públicas de disponibilidad
  */
 @SpringBootApplication
-@ComponentScan(basePackages = "org.campuslab.catalog")
 public class CatalogServiceApplication {
 
     public static void main(String[] args) {
