@@ -6,6 +6,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -14,6 +15,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.util.List;
 
+import org.campuslab.catalog.dto.BookingStockDTO;
 import org.campuslab.catalog.dto.ResourceRequestDTO;
 import org.campuslab.catalog.dto.ResourceResponseDTO;
 import org.campuslab.catalog.dto.StockUpdateDTO;
@@ -118,6 +120,87 @@ class ResourceControllerTest {
                         .with(user("estudiante").roles("ESTUDIANTE"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
+                .andExpect(status().isForbidden());
+
+        verifyNoInteractions(resourceService);
+    }
+
+    // ---------- Stock por reserva (lo llama ms-bookings con el JWT del técnico/admin que aprueba) ----------
+
+    @Test
+    void tomarStockDeReserva_conRolTecnico_deberiaDevolver200() throws Exception {
+        when(resourceService.holdStockForBooking(10L, 77L))
+                .thenReturn(new BookingStockDTO(10L, 77L, true, true, 2));
+
+        mockMvc.perform(post("/api/catalog/resources/{id}/booking-stock/{bookingId}", 10L, 77L)
+                        .with(user("tecnico").roles("TECNICO")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.changed").value(true))
+                .andExpect(jsonPath("$.quantityAvailable").value(2));
+
+        verify(resourceService).holdStockForBooking(10L, 77L);
+    }
+
+    @Test
+    void liberarStockDeReserva_conRolTecnico_deberiaDevolver200() throws Exception {
+        when(resourceService.releaseStockForBooking(10L, 77L))
+                .thenReturn(new BookingStockDTO(10L, 77L, true, true, 3));
+
+        mockMvc.perform(delete("/api/catalog/resources/{id}/booking-stock/{bookingId}", 10L, 77L)
+                        .with(user("tecnico").roles("TECNICO")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.quantityAvailable").value(3));
+
+        verify(resourceService).releaseStockForBooking(10L, 77L);
+    }
+
+    @Test
+    void tomarYLiberarStockDeReserva_conRolAdmin_deberiaDevolver200() throws Exception {
+        when(resourceService.holdStockForBooking(10L, 77L))
+                .thenReturn(new BookingStockDTO(10L, 77L, true, true, 2));
+        when(resourceService.releaseStockForBooking(10L, 77L))
+                .thenReturn(new BookingStockDTO(10L, 77L, true, true, 3));
+
+        mockMvc.perform(post("/api/catalog/resources/{id}/booking-stock/{bookingId}", 10L, 77L)
+                        .with(user("admin").roles("ADMIN")))
+                .andExpect(status().isOk());
+        mockMvc.perform(delete("/api/catalog/resources/{id}/booking-stock/{bookingId}", 10L, 77L)
+                        .with(user("admin").roles("ADMIN")))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void stockDeReserva_conRolEstudianteOSinSesion_deberiaRechazarse() throws Exception {
+        mockMvc.perform(post("/api/catalog/resources/{id}/booking-stock/{bookingId}", 10L, 77L)
+                        .with(user("estudiante").roles("ESTUDIANTE")))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(delete("/api/catalog/resources/{id}/booking-stock/{bookingId}", 10L, 77L)
+                        .with(user("estudiante").roles("ESTUDIANTE")))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/api/catalog/resources/{id}/booking-stock/{bookingId}", 10L, 77L))
+                .andExpect(status().isUnauthorized());
+
+        verifyNoInteractions(resourceService);
+    }
+
+    @Test
+    void tomarStockDeReserva_sinUnidades_deberiaDevolver409ConElMensaje() throws Exception {
+        when(resourceService.holdStockForBooking(10L, 77L))
+                .thenThrow(new IllegalStateException("No hay stock disponible de 'Microscopio' (0 de 3)"));
+
+        mockMvc.perform(post("/api/catalog/resources/{id}/booking-stock/{bookingId}", 10L, 77L)
+                        .with(user("tecnico").roles("TECNICO")))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("No hay stock disponible de 'Microscopio' (0 de 3)"));
+    }
+
+    @Test
+    void ajustarStockLibre_conRolTecnico_sigueSiendoSoloDeAdmin() throws Exception {
+        // El técnico solo puede mover stock a través de las reservas, no ajustarlo a mano.
+        mockMvc.perform(put("/api/catalog/resources/{id}/stock", 10L)
+                        .with(user("tecnico").roles("TECNICO"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{ \"delta\": 5 }"))
                 .andExpect(status().isForbidden());
 
         verifyNoInteractions(resourceService);

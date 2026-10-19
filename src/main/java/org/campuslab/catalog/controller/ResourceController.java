@@ -2,6 +2,7 @@ package org.campuslab.catalog.controller;
 
 import java.util.List;
 
+import org.campuslab.catalog.dto.BookingStockDTO;
 import org.campuslab.catalog.dto.ResourceRequestDTO;
 import org.campuslab.catalog.dto.ResourceResponseDTO;
 import org.campuslab.catalog.dto.ResourceUpdateDTO;
@@ -55,6 +56,18 @@ public class ResourceController {
     @PutMapping("/{id}/stock")
     public ResourceResponseDTO adjustStock(@PathVariable Long id, @Valid @RequestBody StockUpdateDTO dto) {
         return service.adjustStock(id, dto);
+    }
+
+    /** ms-campuslab-bookings: una reserva se aprobó -> toma 1 unidad del equipo. Idempotente por reserva. */
+    @PostMapping("/{id}/booking-stock/{bookingId}")
+    public BookingStockDTO holdStockForBooking(@PathVariable Long id, @PathVariable Long bookingId) {
+        return service.holdStockForBooking(id, bookingId);
+    }
+
+    /** ms-campuslab-bookings: la reserva se devolvió o se canceló -> devuelve la unidad. Idempotente. */
+    @DeleteMapping("/{id}/booking-stock/{bookingId}")
+    public BookingStockDTO releaseStockForBooking(@PathVariable Long id, @PathVariable Long bookingId) {
+        return service.releaseStockForBooking(id, bookingId);
     }
 
     @DeleteMapping("/{id}")
