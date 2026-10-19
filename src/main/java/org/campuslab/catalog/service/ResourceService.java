@@ -2,6 +2,7 @@ package org.campuslab.catalog.service;
 
 import java.util.List;
 
+import org.campuslab.catalog.dto.BookingStockDTO;
 import org.campuslab.catalog.dto.ResourceRequestDTO;
 import org.campuslab.catalog.dto.ResourceResponseDTO;
 import org.campuslab.catalog.dto.ResourceUpdateDTO;
@@ -11,6 +12,7 @@ import org.campuslab.catalog.entity.Lab;
 import org.campuslab.catalog.entity.MovementType;
 import org.campuslab.catalog.entity.Resource;
 import org.campuslab.catalog.entity.ResourceCategory;
+import org.campuslab.catalog.entity.ResourceStatus;
 import org.campuslab.catalog.entity.ResourceStock;
 import org.campuslab.catalog.entity.ResourceStockMovement;
 import org.campuslab.catalog.entity.ResourceType;
@@ -125,12 +127,102 @@ public class ResourceService {
         }
         stock.setQuantityAvailable(nuevoDisponible);
         stockRepository.save(stock);
+        syncStatusWithStock(resource, stock);
         movementRepository.save(toMovement(resource, dto));
         return toDtoWithDetails(resource);
     }
 
+    /**
+     * Toma 1 unidad del recurso para una reserva que acaba de aprobarse.
+     *
+     * Solo los EQUIPOS descuentan stock por reserva (las salas no tienen unidades y los insumos se
+     * consumen, no se prestan). Es idempotente por reserva: si esa reserva ya tiene la unidad tomada,
+     * no vuelve a descontar. Sin unidades disponibles lanza IllegalStateException (409).
+     */
+    public BookingStockDTO holdStockForBooking(Long resourceId, Long bookingId) {
+        Resource resource = getResource(resourceId);
+        ResourceStock stock = lockStockIfBookable(resource);
+        if (stock == null) {
+            return BookingStockDTO.unmanaged(resourceId, bookingId);
+        }
+        if (unitsHeldByBooking(resourceId, bookingId) > 0) {
+            return new BookingStockDTO(resourceId, bookingId, true, false, stock.getQuantityAvailable());
+        }
+        if (stock.getQuantityAvailable() < 1) {
+            throw new IllegalStateException("No hay stock disponible de '" + resource.getName()
+                    + "' (0 de " + stock.getQuantityTotal() + ")");
+        }
+        stock.setQuantityAvailable(stock.getQuantityAvailable() - 1);
+        stockRepository.save(stock);
+        syncStatusWithStock(resource, stock);
+        movementRepository.save(bookingMovement(resource, MovementType.RESERVA, -1, bookingId,
+                "Reserva #" + bookingId + " aprobada"));
+        return new BookingStockDTO(resourceId, bookingId, true, true, stock.getQuantityAvailable());
+    }
+
+    /**
+     * Devuelve la unidad que una reserva tenía tomada (devuelta o cancelada después de aprobarse).
+     * Idempotente: si la reserva no tiene nada tomado, no cambia el stock.
+     */
+    public BookingStockDTO releaseStockForBooking(Long resourceId, Long bookingId) {
+        Resource resource = getResource(resourceId);
+        ResourceStock stock = lockStockIfBookable(resource);
+        if (stock == null) {
+            return BookingStockDTO.unmanaged(resourceId, bookingId);
+        }
+        if (unitsHeldByBooking(resourceId, bookingId) <= 0) {
+            return new BookingStockDTO(resourceId, bookingId, true, false, stock.getQuantityAvailable());
+        }
+        stock.setQuantityAvailable(Math.min(stock.getQuantityTotal(), stock.getQuantityAvailable() + 1));
+        stockRepository.save(stock);
+        syncStatusWithStock(resource, stock);
+        movementRepository.save(bookingMovement(resource, MovementType.DEVOLUCION, 1, bookingId,
+                "Reserva #" + bookingId + " liberada"));
+        return new BookingStockDTO(resourceId, bookingId, true, true, stock.getQuantityAvailable());
+    }
+
     public void delete(Long id) {
         resourceRepository.delete(getResource(id));
+    }
+
+    /**
+     * Un equipo sin unidades disponibles pasa a EN_USO y vuelve a DISPONIBLE cuando recupera alguna.
+     * MANTENIMIENTO y BAJA son decisiones manuales: nunca se tocan.
+     */
+    private void syncStatusWithStock(Resource resource, ResourceStock stock) {
+        if (resource.getResourceType() != ResourceType.EQUIPO) {
+            return;
+        }
+        if (stock.getQuantityAvailable() == 0 && resource.getStatus() == ResourceStatus.DISPONIBLE) {
+            resource.setStatus(ResourceStatus.EN_USO);
+        } else if (stock.getQuantityAvailable() > 0 && resource.getStatus() == ResourceStatus.EN_USO) {
+            resource.setStatus(ResourceStatus.DISPONIBLE);
+        }
+    }
+
+    /** Stock del recurso (con la fila bloqueada) si es un equipo; null si no descuenta por reserva. */
+    private ResourceStock lockStockIfBookable(Resource resource) {
+        if (resource.getResourceType() != ResourceType.EQUIPO) {
+            return null;
+        }
+        return stockRepository.findByResourceIdForUpdate(resource.getId()).orElse(null);
+    }
+
+    /** Unidades que la reserva tiene tomadas hoy: lo reservado menos lo devuelto. */
+    private long unitsHeldByBooking(Long resourceId, Long bookingId) {
+        return -movementRepository.netQuantityForBooking(resourceId, bookingId,
+                List.of(MovementType.RESERVA, MovementType.DEVOLUCION));
+    }
+
+    private ResourceStockMovement bookingMovement(Resource resource, MovementType type, int quantity,
+                                                  Long bookingId, String note) {
+        return ResourceStockMovement.builder()
+                .resource(resource)
+                .movementType(type)
+                .quantity(quantity)
+                .referenceBookingId(bookingId)
+                .note(note)
+                .build();
     }
 
     private void validatePerType(ResourceRequestDTO dto) {

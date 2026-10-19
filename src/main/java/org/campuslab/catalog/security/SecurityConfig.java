@@ -28,6 +28,10 @@ public class SecurityConfig {
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.GET, "/api/catalog/**").authenticated()
+                // El técnico aprueba/devuelve reservas (ms-bookings) y eso mueve el stock del equipo;
+                // solo puede hacerlo por estos endpoints, no ajustar stock libremente (eso sigue siendo ADMIN).
+                .requestMatchers(HttpMethod.POST, "/api/catalog/resources/*/booking-stock/*").hasAnyRole("ADMIN", "TECNICO")
+                .requestMatchers(HttpMethod.DELETE, "/api/catalog/resources/*/booking-stock/*").hasAnyRole("ADMIN", "TECNICO")
                 .requestMatchers("/api/catalog/**").hasRole("ADMIN")
                 .anyRequest().authenticated())
             .oauth2ResourceServer(oauth -> oauth
